@@ -39,6 +39,7 @@ class WaymoConfidenceDataset(DatasetTemplate):
 
     def __getitem__(self, index):
         if self.training:
+            # 1:1的比例采样正负样本
             if index % 2 == 0:
                 data_info = copy.deepcopy(self.pos_tk_infos[index//2])
             else:
@@ -61,8 +62,10 @@ class WaymoConfidenceDataset(DatasetTemplate):
         score_all = data_info['score']
         frame_id_all = data_info['sample_idx']
         pts_all = data_info['pts']
-        iou_all = data_info.get('refine_iou', None)
+        iou_all = data_info.get('refine_iou', None) # iou分支的真值
         
+        # -----------从整条轨迹上随机采样部分帧------------
+
         # randomly sample the object track
         if self.training:
             traj_len = len(traj_all)
@@ -84,7 +87,7 @@ class WaymoConfidenceDataset(DatasetTemplate):
             score = score_all
             iou = iou_all
 
-
+        # ---------随机挑选一帧的框坐标系作为新的坐标系，变换所有点云---------
         if self.training:
             sample_idx = np.random.randint(0, len(traj))
         else:
@@ -97,6 +100,7 @@ class WaymoConfidenceDataset(DatasetTemplate):
 
         box_num = len(traj)
 
+        # ----------随机采样每帧点云到固定的大小256-------------------
         sample_pts = []
         for i in range(len(pts)):
             pts_i = pts[i]
@@ -105,6 +109,7 @@ class WaymoConfidenceDataset(DatasetTemplate):
             sample_pts.append(sa_pts_i)
         pts = np.stack(sample_pts, axis=0)
 
+        # --------------------特征编码---------------------
         input_pts_data = []
         for enc_cfg in self.encoding:
             if enc_cfg == 'placeholder':
@@ -117,14 +122,14 @@ class WaymoConfidenceDataset(DatasetTemplate):
             elif enc_cfg == 'intensity':
                 input_pts_data.append(pts[:, :, [3]])
 
-            elif enc_cfg == 'p2co':
+            elif enc_cfg == 'p2co': # 编码点云到对应边界框八个角点+中心点的相对坐标
                 co_pts = boxes_to_corners_3d(traj).reshape(box_num, -1)
                 co_ce_pts = np.concatenate([co_pts, traj[:, :3]], axis=-1)
                 p2co_feat = np.tile(pts[:, :, :3], (1, 1, 9)) -\
                     np.tile(co_ce_pts[:, None, :], (1, self.query_pts_num, 1))
                 input_pts_data.append(p2co_feat)
 
-            elif enc_cfg == 'box_pos':
+            elif enc_cfg == 'box_pos': # 没用到
                 box_pos = np.concatenate([traj[:, :3], traj[:, 6:7]], axis=-1)[:, None, :]
                 box_pos = np.tile(box_pos, (1, self.query_pts_num, 1))
                 input_pts_data.append(box_pos)
@@ -136,6 +141,7 @@ class WaymoConfidenceDataset(DatasetTemplate):
             else:
                 raise NotImplementedError
 
+        # ------------填充到固定数量200--------------
         input_pts_data = np.concatenate(input_pts_data, axis=2)
         input_pts_data = np.concatenate([
             input_pts_data,
@@ -143,10 +149,11 @@ class WaymoConfidenceDataset(DatasetTemplate):
             axis=0
         )
 
-        # pad to a same track length
+        # pad to a same track length 对gt也执行此操作
         iou = np.concatenate((iou, np.full(self.query_num-len(iou), -1)), axis=0)
         score = np.concatenate((score, np.full(self.query_num-len(score), -1)), axis=0)
 
+        # -------------------打包输出---------------
         obj_info = {
             'sequence_name': data_info['sequence_name'],
             'frame': frame_id,

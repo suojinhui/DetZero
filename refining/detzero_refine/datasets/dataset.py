@@ -108,7 +108,7 @@ class DatasetTemplate(torch.utils.data.Dataset):
             # only use false positive object tracks for crm training
             mth_tk = obj_info.get('matched_tracklet', True)
             if self.training:
-                if not mth_tk and not self.iou: continue
+                if not mth_tk and not self.iou: continue # 如果不是conf细化，并且mth_tk为false，会被跳过
             else:
                 if not mth_tk and not self.dataset_cfg.save_to_file: continue
             
@@ -116,7 +116,7 @@ class DatasetTemplate(torch.utils.data.Dataset):
 
             data_infos[dict_key] = obj_info
 
-            if self.iou is not None:
+            if self.iou is not None: # 载入iou分支的真值
                 data_infos[dict_key]['refine_iou'] = self.iou[seq][obj_id]
             else:
                 data_infos[dict_key]['refine_iou'] = np.zeros(len(obj_info['sample_idx']))
