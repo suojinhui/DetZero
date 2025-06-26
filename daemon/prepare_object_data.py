@@ -68,8 +68,8 @@ class WaymoObjectDataPrepare():
             tracklet_ids = seq_info['label'].keys()
             for tk_id in tracklet_ids:
                 tklet = seq_info['label'][tk_id]
-                tk_infos = tklet['track']
-                gt_infos = tklet['gt']
+                tk_infos = tklet['track'] # 预测轨迹
+                gt_infos = tklet['gt'] # gt轨迹
                 
                 # only process one class
                 if self.class_name not in tk_infos['name']:
@@ -121,23 +121,23 @@ class WaymoObjectDataPrepare():
                     tmp_info['boxes_global'].append(boxes[idx][:7])
                     tmp_info['score'].append(score[idx])
                     tmp_info['hit'].append(hit[idx])
-                    tmp_info['matched_tracklet'].append(True)
+                    tmp_info['matched_tracklet'].append(True) # 有一条GT轨迹与其匹配
 
                     order_idx = np.where(gt_sample_idx == sample_idx[idx])[0]
-                    if len(order_idx) > 0:
+                    if len(order_idx) > 0: # 有对应GT
                         tmp_info['gt_obj_id'].append(gt_obj_id[order_idx[0]])
                         tmp_info['gt_name'].append(gt_name[order_idx[0]])
                         tmp_info['gt_boxes_global'].append(gt_boxes[order_idx[0]][:7])
                         tmp_info['matched'].append(True)
-                    else:
+                    else: # 无对应gt，dummy填充
                         tmp_info['gt_obj_id'].append(dummy_gt_id)
                         tmp_info['gt_name'].append(dummy_gt_name)
                         tmp_info['gt_boxes_global'].append(np.zeros_like(boxes[idx][:7]))
-                        tmp_info['matched'].append(False)
+                        tmp_info['matched'].append(False) # 没匹配上的box
 
                     output_dict[frm_id] = tmp_info
 
-            
+            # 主要是为了构造conf分支的负样本
             # process the tracklets which have no matched gt labels
             fp_infos = seq_info['unlabel']
             tracklet_ids = fp_infos.keys()

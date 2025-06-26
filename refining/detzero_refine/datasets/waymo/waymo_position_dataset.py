@@ -41,6 +41,8 @@ class WaymoPositionDataset(DatasetTemplate):
         if data_info.get('gt_boxes_global', None) is not None:
             traj_gt_all = data_info['gt_boxes_global'][:, :7]
 
+        # -----------------从轨迹中随机抽样几帧---------------
+
         # randomly sample the object track
         if self.training:
             traj_len = len(traj_all[matched])
@@ -68,36 +70,43 @@ class WaymoPositionDataset(DatasetTemplate):
             traj_gt = traj_gt_all
             pts = pts_all
 
-        # randomly select the inital coordinate origin
+        # -------------------变换点云到其中某个框的坐标系下---------
+
+        # randomly select the inital coordinate origin 随机选取一个框作为新的坐标系
         if self.training:
             sample_idx = np.random.randint(0, len(traj))
         else:
             sample_idx = (len(traj)) // 2
         init_box = traj[sample_idx, 0:7].copy()
         
-        # transform traj and traj_gt to init box coordinate
+        # transform traj and traj_gt to init box coordinate 将点云序列都变化到该坐标系下
         init_box, pts, traj, traj_gt = init_coords_transform(
             init_box, pts, traj, traj_gt)
 
         # gt_box = traj_gt[sample_idx, 0:7].copy()
-        box_num = len(traj)
+        box_num = len(traj) # 序列数量
+
+        # ---------------------对每一帧的点云随机采样到固定数量--------
 
         # for each proposal, randomly sample 256 points as query,
         #   randomly sample 48 points as dense trajectory
         query_pts, traj_pts = [], []
         for i in range(len(pts)):
-            pts_sa = sample_points(pts[i], sample_num=self.query_pts_num)
+            pts_sa = sample_points(pts[i], sample_num=self.query_pts_num) # 采样256
             query_pts.append(pts_sa)
 
-            pts_sa = sample_points(pts[i], sample_num=self.memory_pts_num)
+            pts_sa = sample_points(pts[i], sample_num=self.memory_pts_num) # 采样48
             traj_pts.append(pts_sa)
 
-        query_pts = np.stack(query_pts, axis=0)
-        traj_pts = np.stack(traj_pts, axis=0)
+        query_pts = np.stack(query_pts, axis=0) # 查询Q
+        traj_pts = np.stack(traj_pts, axis=0) # K、V
+
+
+        # -------对点云进行特征编码，主要将边界框的位置信息编码到点云中-------
 
         local_pts_data = []
         global_pts_data = []
-        for enc_cfg in self.encoding:
+        for enc_cfg in self.encoding: # 特征编码
             if enc_cfg == 'placeholder':
                 local_pts_data.append(query_pts)
                 global_pts_data.append(traj_pts)
@@ -111,7 +120,7 @@ class WaymoPositionDataset(DatasetTemplate):
                 local_pts_data.append(query_pts[:, :, [3]])
                 global_pts_data.append(traj_pts[:, :, [3]])
 
-            elif enc_cfg == 'p2co':
+            elif enc_cfg == 'p2co': # 编码点到框八个角点和框中心的相对坐标 27-dim
                 co_pts = boxes_to_corners_3d(traj).reshape(box_num, -1)
                 co_ce_pts = np.concatenate([co_pts, traj[:, :3]], axis=-1)
                 
@@ -123,11 +132,11 @@ class WaymoPositionDataset(DatasetTemplate):
                     np.tile(co_ce_pts[:, None, :], (1, self.memory_pts_num, 1))
                 global_pts_data.append(p2co_feat)
 
-            elif enc_cfg == 'score':
+            elif enc_cfg == 'score': # 框的置信度分数
                 local_pts_data.append(np.tile(score[:, None, None], (1, self.query_pts_num, 1)))
                 global_pts_data.append(np.tile(score[:, None, None], (1, self.memory_pts_num, 1)))
 
-            elif enc_cfg == 'class':
+            elif enc_cfg == 'class': # 没用到
                 tmp_cat = np.zeros(3)
                 tmp_cat[obj_cls - 1] = 1
                 local_pts_data.append(np.tile(tmp_cat[None, None, :], (box_num, self.query_pts_num, 1)))
@@ -139,12 +148,14 @@ class WaymoPositionDataset(DatasetTemplate):
         local_pts_data = np.concatenate(local_pts_data, axis=2)
         global_pts_data = np.concatenate(global_pts_data, axis=2)
 
+        # ----------做增强，随机x、y、z反转和随机缩放，并pad到固定200的数量-------------
+
         # do augmentation after all the distance related calculation
         if self.training and self.augment_full:
             query_pts, traj_pts, traj, traj_gt = augment_full_track(
                 query_pts, traj_pts, traj, traj_gt)
         
-        # pad the box
+        # pad the box 统一pad到200的数量
         local_pts_data = np.concatenate([
             local_pts_data,
             np.zeros((self.query_num-box_num, self.query_pts_num, local_pts_data.shape[2]))],
@@ -156,13 +167,13 @@ class WaymoPositionDataset(DatasetTemplate):
             axis=0
         )
 
-        zeros = np.zeros((self.query_num-len(traj_gt), 7), dtype=np.float32)
+        zeros = np.zeros((self.query_num-len(traj_gt), 7), dtype=np.float32) # 对边界框也进行pad
         traj_gt = np.concatenate((traj_gt[:, :7], copy.deepcopy(zeros)), axis=0)
         traj = np.concatenate((traj[:, :7], copy.deepcopy(zeros)), axis=0)
         padding_mask = np.concatenate(
             (np.zeros(box_num), np.full(self.query_num-box_num, 1)), axis=0)
 
-        obj_info = {
+        obj_info = { # 打包输出
             'sequence_name': data_info['sequence_name'],
             'frame': frm_id,
             'obj_id': data_info['obj_id'],

@@ -114,7 +114,7 @@ class GeometryHead(nn.Module):
     def forward(self, data_dict):
         query = [data_dict['query']]
         memory = [data_dict['memory']]
-        query_pos = [data_dict['geo_query_boxes'][..., 3:6]]
+        query_pos = [data_dict['geo_query_boxes'][..., 3:6]] # query对应的边界框尺寸作为位置编码
         memory_pos = [None]
 
         preds_dicts = multi_apply(

@@ -78,12 +78,12 @@ class PositionHead(nn.Module):
     def init_bn_momentum(self):
         for m in self.modules():
             if isinstance(m, (nn.BatchNorm2d, nn.BatchNorm1d)):
-                m.momentum = self.bn_momentum
+                m.momentum = self.bn_momentum 
     
     def forward(self, data_dict):
-        query = data_dict['query']
+        query = data_dict['query'] # [bs, 256, 200]
         memory = data_dict['memory']
-        key_padding_mask = data_dict['padding_mask'].type(torch.bool)
+        key_padding_mask = data_dict['padding_mask'].type(torch.bool) # 标识填充
         query_pos = data_dict['query_pos']
         memory_pos = None
         attn_mask = None

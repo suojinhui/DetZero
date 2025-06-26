@@ -15,8 +15,8 @@ class PositionTransformer(nn.Module):
     def __init__(self, model_cfg, query_point_dims=None, memory_point_dims=None):
         super().__init__()
         self.model_cfg = model_cfg
-        self.query_point_dims = query_point_dims
-        self.memory_point_dims = memory_point_dims
+        self.query_point_dims = query_point_dims # 32
+        self.memory_point_dims = memory_point_dims # 32
         self.embed_dims = self.model_cfg.get('EMBED_DIMS', 256)
         
         self.target_assigner = TargetAssigner(mode='position')
@@ -79,6 +79,7 @@ class PositionTransformer(nn.Module):
         if self.decoder_cfg['NAME'] == 'PositionHead':
             self.decoder = PositionHead(**self.decoder_cfg)
 
+    # 构建注意力掩码
     def init_attn_mask(self, half_windows=3, box_num=200, pts_num=256):
         self.attn_mask = torch.zeros((box_num + 2 * half_windows) * box_num)
         windows = 2 * half_windows + 1
@@ -97,30 +98,32 @@ class PositionTransformer(nn.Module):
     
     def forward(self, data_dict):
 
-        local_pts = data_dict['pos_query_points']
-        global_pts = data_dict['pos_memory_points']
+        # -------------------对QKV进行编码------------------
+
+        local_pts = data_dict['pos_query_points'] # (bs, 200, 256, 32)
+        global_pts = data_dict['pos_memory_points'] # (bs, 200, 48, 32)
         traj = data_dict['pos_trajectory']
-        bs, box_num, pts_num, _ = local_pts.size()
+        bs, box_num, pts_num, _ = local_pts.size() # (bs, 200, 256, 32)
         device = local_pts.device
         
         # prepare query features
-        local_pts = local_pts.permute(0, 3, 1, 2)
-        q_feat = self.query_encoder(local_pts)
-        q_feat = torch.max(q_feat, dim=3, keepdim=False)[0]
-        q_feat = self.query_mlp(q_feat)
+        local_pts = local_pts.permute(0, 3, 1, 2) # (bs, 32, 200, 256)
+        q_feat = self.query_encoder(local_pts) # (bs, 256, 200, 256)
+        q_feat = torch.max(q_feat, dim=3, keepdim=False)[0] # (bs, 256, 200)
+        q_feat = self.query_mlp(q_feat) # (bs, 256, 200)
         # prepare query pos
-        query_pos = torch.cat([traj[..., :3], traj[..., 6:]], dim=-1)
+        query_pos = torch.cat([traj[..., :3], traj[..., 6:]], dim=-1) # 取边界框的位置和朝向，作为位置编码的最初输入
 
         # prepare memory features
-        global_pts_num = global_pts.size(2)
-        global_pts = global_pts.permute(0, 3, 1, 2).reshape(bs, -1, box_num*global_pts_num)
-        m_feat = self.memory_encoder(global_pts)
-        m_feat = torch.max(m_feat, dim=2, keepdim=True)[0]
-        m_feat = torch.cat([m_feat.repeat(1, 1, global_pts.size(2)), self._points_intermediate], dim=1)
-        m_feat = self.memory_mlp(m_feat)
+        global_pts_num = global_pts.size(2) # 每帧点云的数量48
+        global_pts = global_pts.permute(0, 3, 1, 2).reshape(bs, -1, box_num*global_pts_num) # (bs, 32, 200x48)
+        m_feat = self.memory_encoder(global_pts) # (bs, 256, 9600)
+        m_feat = torch.max(m_feat, dim=2, keepdim=True)[0] # 池化的全局特征 
+        m_feat = torch.cat([m_feat.repeat(1, 1, global_pts.size(2)), self._points_intermediate], dim=1) # 全局特征拼接到每个点云特征后
+        m_feat = self.memory_mlp(m_feat) # # (bs, 256, 9600)
 
         data_dict['query'] = q_feat     # [bs, 256, 200]
-        data_dict['memory'] = m_feat      # [bs, 256, 200*128]
+        data_dict['memory'] = m_feat      # [bs, 256, 200*48] 具体看debug
         data_dict['query_pos'] = query_pos
 
         preds_dict = self.decoder(data_dict)

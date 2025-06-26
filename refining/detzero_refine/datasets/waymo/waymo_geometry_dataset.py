@@ -24,18 +24,20 @@ class WaymoGeometryDataset(DatasetTemplate):
         self.init_infos(self.mode)
 
     def extract_track_feature(self, data_info):
-        traj_all = data_info['boxes_global']
-        score_all = data_info['score']
-        frame_id_all = data_info['sample_idx']
-        pose_all = data_info['pose']
-        pts_all = data_info['pts']
-        matched = data_info['matched']
-        mth_tk = data_info['matched_tracklet']
-        state = data_info['state']
+        traj_all = data_info['boxes_global'] # 整个轨迹上的box序列，这些边界框应该在其中一个框对应的坐标系下。
+        score_all = data_info['score'] # 每个框的置信度
+        frame_id_all = data_info['sample_idx'] # 帧 id
+        pose_all = data_info['pose'] # 自车位姿
+        pts_all = data_info['pts'] # 点云数据
+        matched = data_info['matched'] # 是否匹配成功（这条轨迹中有的框无对应的GT与之匹配）
+        mth_tk = data_info['matched_tracklet'] # 该轨迹是否与一条GT轨迹匹配上了
+        state = data_info['state'] # 该目标的状态
         if data_info.get('gt_boxes_global', None) is not None:
-            traj_gt_all = data_info['gt_boxes_global']
+            traj_gt_all = data_info['gt_boxes_global'] # gtbox
 
-        # randomly sample the object track to increase data numbers
+        # ---------------从整个序列中随机采样部分帧----------------
+
+        # randomly sample the object track to increase data numbers 增加数据的多样性
         if self.training:
             traj_len = matched.sum()
             samples = random.sample(
@@ -62,7 +64,8 @@ class WaymoGeometryDataset(DatasetTemplate):
             frm_id = frame_id_all
             score = score_all
 
-        
+        # --------------随机选取几帧作为查询------------------
+
         # randomly sample the query proposals
         if self.training:
             if self.query_num > len(traj):
@@ -73,22 +76,26 @@ class WaymoGeometryDataset(DatasetTemplate):
             query_idx = np.argsort(score)[::-1][:self.query_num]
             self.query_num = len(query_idx)
         
-        
+        # --------------将所有框的点云转化到当前同一的局部坐标系下--------
+
         # transform the object points to the corresponding box center frame
         pts = local_coords_transform(pts, traj)
 
-        query_pts = [pts[ind].copy() for ind in query_idx]
+        query_pts = [pts[ind].copy() for ind in query_idx] # 从这里看查询点云没有经过特征编码？
         query_box = np.array([traj[ind, :].copy() for ind in query_idx])
-        gt_box = np.array([traj_gt[ind, :].copy() for ind in query_idx])
+        gt_box = np.array([traj_gt[ind, :].copy() for ind in query_idx]) # 提取点云、预测box、gtbox
 
         # after all the transform, set box center and heading to 0
         query_box[:, [0, 1, 2, 6]] = 0
-        gt_box[:, [0, 1, 2, 6]] = 0
+        gt_box[:, [0, 1, 2, 6]] = 0 # 对边界框做对齐，将xyz和朝向都设置为0
 
 
+        # -------------对其中每个box的点云做随机的y方向翻转--------------
         # augment for each box of the object track
         if self.training and self.augment_single:
             pts = augment_single_box(pts)
+
+        # -------------特征编码，将边界框的尺寸信息编码到点云中-----------
 
         # encode features for points of each proposal
         pts_new = []
@@ -111,44 +118,46 @@ class WaymoGeometryDataset(DatasetTemplate):
                 pts_feat.append(p2s_front)
                 pts_feat.append(p2s_back)
 
-            if 'score' in self.encoding:
+            if 'score' in self.encoding: # 还有置信度信息
                 pts_feat.append(np.array(score[idx]).repeat(pts_per_box.shape[0])[:, None])
 
             pts_new.append(np.concatenate(pts_feat, axis=1))
 
         pts = np.concatenate(pts_new, axis=0)
 
+        # --------------对编码后点云做翻转、旋转、缩放-----------------
+
         # do augmentation for the whole object track
         if self.training and self.augment_full:
-            pts, traj, query_pts, query_box, gt_box = augment_full_track(
+            pts, traj, query_pts, query_box, gt_box = augment_full_track( # 同时缩放了边界框的尺寸，缩放对整体时间序列的上的每个框是一致的
                 pts, traj, query_pts, query_box, gt_box)
 
-
+        # ---------------------执行点云随机采样------------------------
         # sample points for each proposal as the value feature
-        pts = sample_points(pts, sample_num=self.memory_pts_num)
+        pts = sample_points(pts, sample_num=self.memory_pts_num) # 采样4096个点 nxc
         # sample points for each query
         for ind in range(self.query_num):
-            query_pts[ind] = sample_points(query_pts[ind], sample_num=self.query_pts_num)
-        query_points = np.array(query_pts)
+            query_pts[ind] = sample_points(query_pts[ind], sample_num=self.query_pts_num) # 对每个查询选取256个点
+        # query_points = np.array(query_pts)
 
 
         obj_info = {
             'sequence_name': data_info['sequence_name'],
             'frame': frm_id,
-            'obj_id': data_info['obj_id'],
-            'obj_cls': self.class_map[data_info['name']],
-            'geo_query_num': self.query_num,
-            'geo_query_boxes': query_box,
-            'geo_query_points': query_pts,
-            'geo_memory_points': pts,
-            'geo_trajectory': traj,
-            'geo_score': score,
-            'gt_geo_query_boxes': gt_box,
-            'gt_geo_trajectory': traj_gt,
-            'pose': pose,
-            'state': state,
-            'matched': matched,
-            'matched_tracklet': mth_tk
+            'obj_id': data_info['obj_id'], # 目标id
+            'obj_cls': self.class_map[data_info['name']], # 1/2/3 代表不同的类别
+            'geo_query_num': self.query_num, # 查询数
+            'geo_query_boxes': query_box, # 查询的box，已经统一同一个坐标系下了
+            'geo_query_points': query_pts, # 查询Q的点云
+            'geo_memory_points': pts, # K和V的点云特征
+            'geo_trajectory': traj, # 时间序列上的所有框坐标尺寸
+            'geo_score': score, # 置信度分数
+            'gt_geo_query_boxes': gt_box, # 查询的gt框
+            'gt_geo_trajectory': traj_gt, # 轨迹的gt框
+            'pose': pose, # 自车位姿
+            'state': state, # 状态
+            'matched': matched, # 跟踪匹配结果
+            'matched_tracklet': mth_tk # 该轨迹是否与一条GT轨迹匹配上了
         }
 
         return obj_info

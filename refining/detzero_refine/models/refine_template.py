@@ -35,15 +35,15 @@ class RefineTemplate(nn.Module):
     def build_networks(self):
         model_info_dict = {
             'module_list': [],
-            'query_point_dims': self.model_cfg.get('QUERY_POINT_DIMS', 0),
-            'memory_point_dims': self.model_cfg.get('MEMORY_POINT_DIMS', 0),
+            'query_point_dims': self.model_cfg.get('QUERY_POINT_DIMS', 0), # 11
+            'memory_point_dims': self.model_cfg.get('MEMORY_POINT_DIMS', 0), # 4
         }
 
         name = self.model_cfg.REGRESSION['NAME']
         reg = __all__[name](
             model_cfg=self.model_cfg.REGRESSION,
-            query_point_dims=model_info_dict['query_point_dims'],
-            memory_point_dims=model_info_dict['memory_point_dims']
+            query_point_dims=model_info_dict['query_point_dims'], # [128、128]
+            memory_point_dims=model_info_dict['memory_point_dims'] # [128、128]
         )
         self.add_module('reg', reg)
 

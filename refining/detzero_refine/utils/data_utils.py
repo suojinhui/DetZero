@@ -63,8 +63,8 @@ def local_coords_transform(pts, traj):
     """
     traj_len = len(traj)
     for i in range(traj_len):
-        pts[i][:, :3] = pts[i][:, :3] - traj[i][:3]
-        pts[i][:, :3] = pts[i][:, :3] @ rotate_yaw(traj[i][6]).T
+        pts[i][:, :3] = pts[i][:, :3] - traj[i][:3] # 平移
+        pts[i][:, :3] = pts[i][:, :3] @ rotate_yaw(traj[i][6]).T # 旋转
 
     return pts
 

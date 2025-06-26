@@ -12,9 +12,9 @@ class GeometryTransformer(nn.Module):
     def __init__(self, model_cfg, query_point_dims=None, memory_point_dims=None):
         super().__init__()
         self.model_cfg = model_cfg
-        self.query_point_dims = query_point_dims
-        self.memory_point_dims = memory_point_dims
-        self.embed_dims = self.model_cfg.get('EMBED_DIMS', 256)
+        self.query_point_dims = query_point_dims # 11
+        self.memory_point_dims = memory_point_dims # 4
+        self.embed_dims = self.model_cfg.get('EMBED_DIMS', 256) # 256
         self.anchor_sizes = self.model_cfg.get('ANCHOR_SIZES',
             [[4.8, 1.8, 1.5], [10.0, 2.6, 3.2], [2.0, 1.0, 1.6]])
 
@@ -35,7 +35,7 @@ class GeometryTransformer(nn.Module):
         # memory encoder
         self.memory_encoder = make_fc_layers(
             self.model_cfg.MEMORY_ENCODER,
-            self.query_point_dims,
+            self.query_point_dims, # 这里写反了，刚好配置文件也写反了
             self.embed_dims*2,
             output_use_norm=True
         )
@@ -116,30 +116,32 @@ class GeometryTransformer(nn.Module):
         return res
     
     def forward(self, data_dict):
-        m_pts = data_dict['geo_memory_points'].permute(0, 2, 1)
+        m_pts = data_dict['geo_memory_points'].permute(0, 2, 1) # bxnxc->bxcxn
         bs, channel, pts_num = m_pts.size()
 
+        # -----------对Q、K、v进行编码-------------------------
         # generate memory features for cross_attn
-        m_feat = self.memory_encoder(m_pts)
-        m_feat = torch.max(m_feat, dim=2, keepdim=True)[0].repeat(1, 1, pts_num)
-        m_feat = torch.cat([self._points_intermediate, m_feat], dim=1)
-        m_feat = self.memory_mlp(m_feat)
+        m_feat = self.memory_encoder(m_pts) # 从11-dim编码到512-dim
+        m_feat = torch.max(m_feat, dim=2, keepdim=True)[0].repeat(1, 1, pts_num) # maxpool->repeat
+        m_feat = torch.cat([self._points_intermediate, m_feat], dim=1) # 拼接到640-dim
+        m_feat = self.memory_mlp(m_feat) # 最终是256-dim
 
         # generate local point features of init_box as query for self_attn
-        q_pts = data_dict['geo_query_points'].clone()
+        q_pts = data_dict['geo_query_points'].clone() 
         if q_pts.dim() == 4:
             bs, pp_num, pts_num, dim = q_pts.size()
             q_pts = q_pts.reshape(bs*pp_num, pts_num, dim)
-            q_pts = q_pts.permute(0, 2, 1)
+            q_pts = q_pts.permute(0, 2, 1) # (3*bn, 4, 256)
         
         q_feat = self.query_encoder(q_pts)
         q_feat = torch.max(q_feat, dim=2, keepdim=False)[0]
-        q_feat = self.query_mlp(q_feat)
+        q_feat = self.query_mlp(q_feat) # (3*bn, 256)
 
-        data_dict['query'] = q_feat.reshape(bs, pp_num, -1).permute(0, 2, 1)
-        data_dict['memory'] = m_feat
+        data_dict['query'] = q_feat.reshape(bs, pp_num, -1).permute(0, 2, 1) # (bn, 256, 3) 可能小于3个，这个取决于轨迹长度
+        data_dict['memory'] = m_feat # (bn, 256, 4096)
         
-        preds_dict = self.decoder(data_dict)[0][0]
+        # ------------使用注意力机制提取长序列点云信息---------
+        preds_dict = self.decoder(data_dict)[0][0] # 多层注意力层
         for key in preds_dict.keys():
             preds_dict[key] = preds_dict[key].permute(0, 1, 3, 2)
         
@@ -173,7 +175,7 @@ class GeometryTransformer(nn.Module):
                     self.targets_dict["geometry_reg"][i, :query_num]
                 ).reshape(query_num, -1, 3)
 
-                reg_loss_temp = torch.gather(reg_loss_temp, 1,
+                reg_loss_temp = torch.gather(reg_loss_temp, 1, # 只收集对应尺寸类别的回归损失
                     self.targets_dict["geometry_cls"][i, :query_num].unsqueeze(-1).unsqueeze(-1).repeat(1, 1, 3))
 
                 reg_loss_temp = reg_loss_temp.sum() / query_num
